@@ -4,6 +4,25 @@ import { connectToDB } from "@/lib/mongoDB";
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 
+// Typed like the removed field under old stripe types, like the new location under new ones.
+type CheckoutShippingDetails<T> = T extends { shipping_details: infer S }
+  ? S
+  : T extends { collected_information: infer C }
+    ? NonNullable<C> extends { shipping_details: infer S }
+      ? S | null
+      : null
+    : null;
+
+// The old top-level field when present (old-version payloads), otherwise
+// collected_information.shipping_details, which holds only address and name.
+function getCheckoutShippingDetails<T extends object>(session: T): CheckoutShippingDetails<T> {
+  const legacy: unknown = Reflect.get(session, 'shipping_details');
+  const collected: unknown = Reflect.get(session, 'collected_information');
+  const moved: unknown =
+    collected && typeof collected === 'object' ? Reflect.get(collected, 'shipping_details') : undefined;
+  return (legacy !== undefined ? legacy : (moved ?? null)) as CheckoutShippingDetails<T>;
+}
+
 export const POST = async (req: NextRequest) => {
   try {
     const rawBody = await req.text();
@@ -25,11 +44,11 @@ export const POST = async (req: NextRequest) => {
       };
 
       const shippingAddress = {
-        street: session?.shipping_details?.address?.line1,
-        city: session?.shipping_details?.address?.city,
-        state: session?.shipping_details?.address?.state,
-        postalCode: session?.shipping_details?.address?.postal_code,
-        country: session?.shipping_details?.address?.country,
+        street: (session == null ? undefined : getCheckoutShippingDetails(session))?.address?.line1,
+        city: (session == null ? undefined : getCheckoutShippingDetails(session))?.address?.city,
+        state: (session == null ? undefined : getCheckoutShippingDetails(session))?.address?.state,
+        postalCode: (session == null ? undefined : getCheckoutShippingDetails(session))?.address?.postal_code,
+        country: (session == null ? undefined : getCheckoutShippingDetails(session))?.address?.country,
       };
 
       const retrieveSession = await stripe.checkout.sessions.retrieve(
